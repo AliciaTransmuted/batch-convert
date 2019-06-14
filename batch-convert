@@ -21,6 +21,8 @@ function show_usage (){
 printf "\n"
 printf "Usage: $0 [options [parameters]]\n"
 printf "\n"
+printf "version 1.0\n"
+printf "\n"
 printf "Options:\n"
 printf " $color_on-sd|--source$color_off, source directory I.E. $color_on-sd /media/$username/source-directory$color_off\n"
 printf " $color_on-td|--target$color_off, target directory I.E. $color_on-td /media/$username/target-directory$color_off\n"

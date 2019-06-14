@@ -1,0 +1,637 @@
+#!/bin/bash
+
+#-------------------------------
+# batch-convert
+# Converts a source directory of media to a target directory
+# June 13, 2019
+# AliciaTransmuted
+# https://github.com/AliciaTransmuted/batch-convert
+# -------------------------------
+# dependancies: ffmpeg gawk mediainfo sed
+
+trap "killall -q ffmpeg; rm -f "tmp/vstats*"; exit" INT TERM EXIT
+
+###
+### Functions
+###
+
+function show_usage (){
+
+printf "\n"
+printf "Usage: $0 [options [parameters]]\n"
+printf "\n"
+printf "Options:\n"
+printf " $color_on-sd|--source$color_off, source directory I.E. $color_on-sd /media/$username/source-directory$color_off\n"
+printf " $color_on-td|--target$color_off, target directory I.E. $color_on-td /media/$username/target-directory$color_off\n"
+printf " $color_on-ad|--archive$color_off, archive directory (in case of problems e.g. power failure) I.E. $color_on-ad /media/$username/archive-directory$color_off\n"
+printf " $color_on-ld|--logs$color_off, logs directory (allow you to scan previous jobs) I.E. $color_on-ld /media/$username/logs-directory$color_off\n"
+printf " $color_on-e|--extension$color_off, target media extension (default is mkv) I.E. $color_on-e mkv$color_off\n"
+printf " $color_on-c|--codec$color_off, output video codec to use (default is h264) I.E. $color_on-c hevc$color_off\n"
+printf " $color_on-f|--fps$color_off, output frames per second to use (default is to calculate from input) I.E. $color_on-f 30$color_off\n"
+printf " $color_on-ac|--audiocodec$color_off, output audio codec to use (default is ac3, this overrides --basictranscode) I.E. $color_on-ac vorbis$color_off\n"
+printf " $color_on-ab|--audiobitrate$color_off, output bitrate to use (default is 128k, this overrides --basictranscode) I.E. $color_on-ab 320k$color_off\n"
+printf " $color_on-l|--logging$color_off, log to terminal AND to a separate log file (default is to terminal only) I.E. $color_on-l$color_off\n"
+printf " $color_on-b|--basictranscode$color_off, use basic transcoding I.E. $color_on-b$color_off\n"
+printf " $color_on-n|--nosubtitles$color_off, do NOT use subtitles (default is to transfer subtitles from source to target) I.E. $color_on-n$color_off\n"
+printf " $color_on-d|--debug$color_off, debug script (this adds a lot of output, but can be useful in troubleshooting problem media) I.E. $color_on-d$color_off\n"
+printf " $color_on-h|--help$color_off, Print help (this dialog) I.E. $color_on-h$color_off\n"
+printf "\n"
+printf "$0 converts a source directory of media to a target directory \n"
+printf "   using a target output format and codec\n"
+printf "   and storing the source media to an archive directory, in case there are problems\n"
+printf "   input media is probed to determine fps and duration (some source media can be near impossible to probe)\n"
+printf "\n"
+
+return 0
+}
+
+
+function add_to_log () {
+
+if [ "$logfile" = "Y" ]; then
+   echo "${log_entry}" >> "${conversion_log}"
+fi
+   
+printf '%s\n' "${log_entry}"
+   
+return 0
+} 
+
+
+# ***** initialize variables
+
+username=$USER
+
+if [ -n "$SUDO_USER" ]; then
+   username=$SUDO_USER
+fi
+
+# ***** directories and target extension may be prefilled here to act as default settings and to minimize typing
+
+source_dir="/media/$username/linmedia/source"
+target_dir="/media/$username/LinFlash/target"
+archive_dir="/media/$username/linmedia/archive"
+log_dir="/media/$username/logfiles"
+ext_out="mkv"
+codec="h264"
+audiocodec="ac3"
+audiobitrate="128k"
+
+log_heading_1="................................................................................................................."
+log_heading_2="................................................................................................................."
+log_heading_3="J O B     H A S     C O M P L E T E D"
+log_heading_4="*****************************************************************************************************************"
+
+# ***** colours
+color_red="\e[91m"
+color_green="\e[92m"
+color_yellow="\e[93m"
+color_cyan="\e[96m"
+
+color_on="${color_green}"
+color_off="\e[0m"
+
+# ***** initialize miscellaneous variables
+
+count=0
+fps=0
+dur=0
+
+total_size_in=0
+total_size_out=0
+calculate_fps="Y"
+logfile="N"
+debug_lines="N"
+do_basic_transcode="N"
+subtitles="Y"
+keep_all="Y"
+
+while [ ! -z "$1" ]; do
+  case "$1" in
+     --source|-sd)
+         shift
+         if [ -n "$1" ]; then
+            source_dir="$1"
+         fi
+         ;;
+     --target|-td)
+         shift
+         if [ -n "$1" ]; then
+            target_dir="$1"
+         fi
+         ;;
+     --archive|-ad)
+         shift
+         if [ -n "$1" ]; then
+            archive_dir="$1"
+         fi
+         ;;
+     --logs|-ld)
+         shift
+         if [ -n "$1" ]; then
+            log_dir="$1"
+         fi
+         ;;
+     --extension|-e)
+         shift
+         if [ -n "$1" ]; then
+            ext_out="$1"
+         fi
+         ;;
+     --codec|-c)
+         shift
+         if [ -n "$1" ]; then
+            codec="$1"
+         fi
+         ;;
+     --fps|-f)
+         shift
+         if [ -n "$1" ]; then
+            fps="$1"
+            calculate_fps="N"
+         fi
+         ;;
+     --logging|-l)
+         logfile="Y"
+         ;;
+     --basictranscode|-b)
+         do_basic_transcode="Y"
+         ;;
+     --nosubtitles|-n)
+         subtitles="N"
+         ;;
+     --debug|-d)
+         debug_lines="Y"
+         ;;
+     --audiocodec|-ac)
+         shift
+         if [ -n "$1" ]; then
+            audiocodec="$1"
+            do_basic_transcode="N"
+         fi
+         ;;
+     --audiobitrate|-ab)
+         shift
+         if [ -n "$1" ]; then
+            audiobitrate="$1"
+            do_basic_transcode="N"
+         fi
+         ;;
+     --help|-h)
+         show_usage
+         exit 1
+         ;;
+     *)
+        show_usage
+        exit 1
+        ;;
+  esac
+shift
+done
+
+# ***** initialize conversion log 
+conversion_log_dir="$log_dir/logs/conversion_logs/"
+conversion_log="${conversion_log_dir}"$(date '+%Y-%m-%d-%H-%M-%S')".log"
+
+if [ "$logfile" = "Y" ]; then
+   mkdir -p "${conversion_log_dir}"
+   echo "${log_heading_1}" > "${conversion_log}"
+fi
+
+printf '%s\n' "${log_heading_1}"
+
+# ***** build unique list of sub directories containing media to convert
+
+if [ -d "${source_dir}" ]; then
+   cd "${source_dir}"
+   find . -type f -name '*' -printf '%P\n' | sed -r 's|/[^/]+$||' |sort |uniq > ~/batch-conversion-data
+   cd
+   if [ ! -s ~/batch-conversion-data ]; then
+      # ***** abort if nothing to convert in source directory
+      log_entry="There are no files to convert in source directory $source_dir... job will end"
+      add_to_log
+      log_entry="${log_heading_2}"
+      add_to_log
+   fi
+else
+   # ***** abort if source directory does not exist at all
+   rm -f ~/batch-conversion-data
+   touch ~/batch-conversion-data
+   log_entry="Source directory $source_dir does not exist... job will end"
+   add_to_log
+   log_entry="${log_heading_2}"
+   add_to_log
+fi
+
+# ***** read generated file ~/batch-conversion-data
+# ***** each line is a unique directory containing media files to transcode
+
+while IFS= read -r current_directory <&3; do
+
+    source_path="${source_dir}""/""${current_directory}"
+
+    if [ -d "${source_path}" ]; then
+       cd "${source_path}"
+       path_out="${target_dir}""/""${current_directory}"
+       mkdir -p "${path_out}"
+       archive_path="${archive_dir}""/""${current_directory}"
+       mkdir -p "${archive_path}"
+
+       for current_file_in in *; do
+          if [ -d "${current_file_in}" ]; then
+		     true
+	      else
+              case "${current_file_in##*/}" in         
+                  *.*)
+                     true
+                    ;;
+                  *)
+                     mv "$current_file_in" "$current_file_in"---renamed.mp4;
+                    ;;
+              esac
+   	      fi
+       done
+
+       for current_file_in in *.*; do
+           test_file_extention="${current_file_in##*.}"
+           input_file_extention=$(echo "$test_file_extention" | tr '[:upper:]' '[:lower:]')
+           ext_flag="N"
+           if [ "${input_file_extention}" = "ass" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "bmp" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "cbz" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "dat" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "diz" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "doc" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "gif" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "htm" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "html" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "idx" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "jpeg" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "jpg" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "lnk" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "log" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "md5" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "nfo" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "pdf" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "pun" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "png" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "ram" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "rar" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "rtf" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "sfk" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "srv" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "ssa" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "sub" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "tif" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "tiff" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "txt" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "url" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "xml" ]; then ext_flag="Y"; fi
+           if [ "${input_file_extention}" = "zip" ]; then ext_flag="Y"; fi
+
+           if [ "${ext_flag}" = "Y" ];then
+           
+              # ***** copy non-media file to output
+           
+              full_in="${source_path}""/""${current_file_in}"
+              full_out="${path_out}""/""${current_file_in}"
+              cp "${full_in}" "${full_out}"
+
+           else
+           
+              # ***** process every media file in the current directory
+           
+              rm -f /tmp/vstats
+
+              file_in="${current_file_in}"
+              full_in="${source_path}""/""${current_file_in}"
+              full_mv="${archive_path}""/""${current_file_in}"
+
+              xbase=${current_file_in##*/}
+              file_out=${xbase%.*}
+              full_out="${path_out}""/""${file_out}"".""${ext_out}"
+              
+              count=$(( count + 1 ))
+              dur=0
+              
+              if [ "${calculate_fps}" = "Y" ]; then
+              
+                 fps=0
+
+                 # ***** access fps via mediainfo
+                 fps_temp=$(mediainfo "--Inform=Video;%FrameRate%" "${current_file_in}")
+                 fps=$(printf "%.*f\n" 0 "${fps_temp}")
+
+                 # ***** if mediainfo cannot find fps, try ffprobe
+                 # ***** next ffprobe occasionally crashes
+                 if [ "${fps}" -eq "0" ]; then
+                    fps_temp=$(( `ffprobe -v 0 -of compact=p=0 -select_streams 0 -show_entries stream=r_frame_rate "${current_file_in}"` ))
+                    fps=$(printf "%.*f\n" 0 "${fps_temp}")
+                 fi
+
+                 # ***** if ffprobe cannot find fps, try this
+                 if [ "${fps}" -eq "0" ]; then
+                    fps_temp=$(ffprobe "${current_file_in}" 2>&1| grep ",* fps" | cut -d "," -f 5 | cut -d " " -f 2)
+                    fps=$(printf "%.*f\n" 0 "${fps_temp}")
+                 fi
+
+                 # ***** if all methods to find fps fail, resort to a fallback default
+                 if [ "${fps}" -eq "0" ]; then fps="24"; fi
+                 if [ "${fps}" -eq "23" ]; then fps="24"; fi
+                 if [ "${fps}" -eq "29" ]; then fps="30"; fi
+                 
+              fi
+
+              # ***** access duration via mediainfo
+              dur_temp=$(mediainfo "--Inform=General;%Duration%" "${current_file_in}")
+              dur_temp2=$(echo "scale=3;$dur_temp/1000" | bc)
+              dur=$(printf "%.*f\n" 0 "${dur_temp2}")
+
+              # ***** if mediainfo cannot find duration, try ffprobe
+              if [ "${dur}" -eq "0" ]; then
+                 dur_temp=$(ffprobe -i "${current_file_in}" -show_entries format=duration -v quiet -of csv="p=0")
+                 dur=$(printf "%.*f\n" 0 "${dur_temp}")
+              fi
+              
+              # ***** calculate total number of frames in media file
+              frames=$(( fps * dur ))
+              frames_p=`echo "${frames}" | awk '{ printf("%'"'"'d\n",$1); }'`
+              
+              # ***** update conversion log with input filename, output filename, output fps, and output codec
+              log_entry="In  ""${full_in}"
+              add_to_log
+
+              log_entry="Out ""${full_out}"" (""${fps}"" fps - ""${codec}"")"
+              add_to_log
+
+              # ***** debug information
+              if [ "${debug_lines}" = "Y" ];then
+                 log_entry=" "
+                 add_to_log
+                 log_entry="***** BASIC DURATION INFORMATION *************************************************************"
+                 add_to_log
+                 log_detail_line1="fps_temp=""${fps_temp}"" - fps=""${fps}"
+                 log_detail_line2=" - dur_temp=""${dur_temp}"" - dur_temp2=""${dur_temp2}"" - dur=""${dur}"
+                 log_detail_line3=" - frames_p=""${frames_p}"
+                 log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                 add_to_log
+              fi
+
+# ***** ffmpeg commands
+
+if [ "${do_basic_transcode}" = "Y" ];then
+
+   if [ "${subtitles}" = "N" ];then
+      nice -n 15 ffmpeg -vstats_file /tmp/vstats -i "${full_in}" -map_chapters -1 -map 0 -c copy -c:v "${codec}" -r "${fps}" -sn -y "${full_out}" 2>/dev/null &
+   else
+      nice -n 15 ffmpeg -vstats_file /tmp/vstats -i "${full_in}" -map_chapters -1 -map 0 -c copy -c:v "${codec}" -r "${fps}" -y "${full_out}" 2>/dev/null &
+   fi
+
+else
+
+   if [ "${subtitles}" = "N" ];then
+      nice -n 15 ffmpeg -vstats_file /tmp/vstats -i "${full_in}" -map_chapters -1 -map 0 -c copy -c:v "${codec}" -r "${fps}" -sn -c:a "${audiocodec}" -b:a "${audiobitrate}" -y "${full_out}" 2>/dev/null &
+   else
+      nice -n 15 ffmpeg -vstats_file /tmp/vstats -i "${full_in}" -map_chapters -1 -map 0 -c copy -c:v "${codec}" -r "${fps}" -c:a "${audiocodec}" -b:a "${audiobitrate}" -y "${full_out}" 2>/dev/null &
+   fi
+
+fi
+
+              # ***** follow ffmpeg progress, providing visual feedback
+              FFMPEG_PID=$! && 
+              stats=0
+              current_frames=0
+              percentage_done=0
+              elapsed=0
+              elapsed_out=0
+              time_left=0
+              start_time=$(date +%s)
+              sleep 2
+
+              # ***** debug information
+              if [ "${debug_lines}" = "Y" ];then
+                 log_entry=" "
+                 add_to_log
+                 log_entry="***** BEFORE PROCESSING LOOP ***************************************************************************"
+                 add_to_log
+                 log_detail_line1="FFMPEG_PID=""${FFMPEG_PID}"" - stats=""${stats}"
+                 log_detail_line2=" - current_frames=""${current_frames}"" - dur_temp2=""${dur_temp2}"
+                 log_detail_line3=" "
+                 log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                 add_to_log
+              fi
+
+              while [ -n "$(ps -p $FFMPEG_PID -o pid=)" ]; do
+
+                  # ***** debug information
+                  if [ "${debug_lines}" = "Y" ];then
+                     log_entry=" "
+                     add_to_log
+                     log_entry="***** JUST ENTERED LOOP ******************************************************************************"
+                     add_to_log
+                     log_detail_line1="FFMPEG_PID=""${FFMPEG_PID}"" - stats=""${stats}"
+                     log_detail_line2=" - current_frames=""${current_frames}"" - dur_temp2=""${dur_temp2}"
+                     log_detail_line3=" "
+                     log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                     add_to_log
+                  fi
+
+                  sleep 2
+
+                  if [ -e /tmp/vstats ]; then
+
+                     # ***** debug information
+                     if [ "${debug_lines}" = "Y" ];then
+                        log_entry=" "
+                        add_to_log
+                        log_entry="***** FILE /tmp/vstats EXISTS ******************************************************************************"
+                        add_to_log
+                        log_detail_line1="FFMPEG_PID=""${FFMPEG_PID}"" - stats=""${stats}"
+                        log_detail_line2=" - current_frames=""${current_frames}"" - dur_temp2=""${dur_temp2}"
+                        log_detail_line3=" "
+                        log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                        add_to_log
+                     fi
+
+#                     stats=$(awk '{gsub(/frame=/, "")}/./{line=$1-1} END{print line}' /tmp/vstats)
+                     stats=$(awk 'END{print $6}' /tmp/vstats)
+
+                     # ***** debug information
+                     if [ "${debug_lines}" = "Y" ];then
+                        log_entry=" "
+                        add_to_log
+                        log_entry="***** UPDATE FILE /tmp/vstats ******************************************************************************"
+                        add_to_log
+                        log_detail_line1="FFMPEG_PID=""${FFMPEG_PID}"" - stats=""${stats}"
+                        log_detail_line2=" - current_frames=""${current_frames}"" - dur_temp2=""${dur_temp2}"
+                        log_detail_line3=" "
+                        log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                        add_to_log
+                     fi
+
+                     if [ -n "${stats}" ]; then
+                        if [ ${stats} -gt ${current_frames} ]; then
+
+                           # ***** debug information
+                           if [ "${debug_lines}" = "Y" ];then
+                              log_entry=" "
+                              add_to_log
+                              log_entry="***** UPDATE ALL VARIABLES ******************************************************************************"
+                              add_to_log
+                              log_detail_line1="FFMPEG_PID=""${FFMPEG_PID}"" - stats=""${stats}"
+                              log_detail_line2=" - current_frames=""${current_frames}"" - dur_temp2=""${dur_temp2}"
+                              log_detail_line3=" "
+                              log_entry="${log_detail_line1}""${log_detail_line2}""${log_detail_line3}"
+                              add_to_log
+                           fi
+
+                           current_frames=${stats}
+                           percentage_done=$(( 100 * current_frames / frames ))
+                           elapsed=$(( $(date +%s) - start_time ))
+                           elapsed_out=$(date -d @$elapsed -u +%H:%M:%S)
+                           time_left=$(date -d @$(awk 'BEGIN{print int(('$elapsed' / '$current_frames') * ('$frames' - '$current_frames'))}') -u +%H:%M:%S)
+                        fi
+                     fi
+
+                  fi
+                  current_frames_p=`echo "${current_frames}" | awk '{ printf("%'"'"'d\n",$1); }'`
+                  progress_1="    Completed: ""${percentage_done}""% - Processing ""${current_frames_p}"" of ""${frames_p}"
+                  progress_2=" video frames - Elapsed time: ""${elapsed_out}"" - Estimated time remaining: ""${time_left}"
+                  progress="${progress_1}""${progress_2}"
+                  # ***** generate line over the same line in terminal to update statistics
+                  printf '%s\r' "${progress}"
+              done
+
+              # ***** debug information
+              if [ "${debug_lines}" = "Y" ];then
+                 log_entry=" "
+                 add_to_log
+                 log_entry="***** AFTER PROCESSING LOOP *****"
+                 add_to_log
+              fi
+
+              # ***** ffmpeg has completed, generate final statistics for current media file
+              current_frames="${frames}"
+              current_frames_p=`echo "${current_frames}" | awk '{ printf("%'"'"'d\n",$1); }'`
+              elapsed=$(( $(date +%s) - start_time ))
+              elapsed_out=$(date -d @$elapsed -u +%H:%M:%S)
+              progress_1="    Completed: 100% - Processing ""${current_frames_p}"" of ""${frames_p}"
+              progress_2=" video frames - Elapsed time: ""${elapsed_out}"" - Estimated time remaining: --:--:--"
+              progress="${progress_1}""${progress_2}"
+              if [ "$logfile" = "Y" ]; then
+                 echo "${progress}" >> "${conversion_log}"
+              fi
+              # ***** generate line over the same line in terminal to update statistics
+              printf '%s\r' "${progress}"
+              rm -f /tmp/vstats*
+              size_in=$(stat -c%s "${current_file_in}")
+              size_out=$(stat -c%s "${full_out}")
+
+              if [ -s "${full_out}" ]; then
+                 if [ ${size_in} -gt ${size_out} ]; then
+                    total_size_in=$(( total_size_in + size_in ))
+                    total_size_out=$(( total_size_out + size_out ))
+                 else
+                    if [ "${keep_all}" = "Y" ]; then
+                       total_size_in=$(( total_size_in + size_in ))
+                       total_size_out=$(( total_size_out + size_out ))
+                    fi
+                 fi
+              fi
+
+              # ***** determine completion date and time for current media file
+              current_date_time=$(date +%s)
+              current_date_out=$(date -d @$current_date_time +%F)
+              current_time_out=$(date -d @$current_date_time +%r)
+              
+              if [ ${count} -gt 99 ]; then
+                 progress_1="${count}"":""${current_date_out}"" ""${current_time_out}"
+              else
+                 if [ ${count} -gt 9 ]; then
+                    progress_1="${count}"": ""${current_date_out}"" ""${current_time_out}"
+                 else
+                    progress_1="${count}"":  ""${current_date_out}"" ""${current_time_out}"
+                 fi   
+              fi
+
+              size_in_p=`echo "${size_in}" | awk '{ printf("%'"'"'d\n",$1); }'`
+              size_out_p=`echo "${size_out}" | awk '{ printf("%'"'"'d\n",$1); }'`
+              
+              if [ -s "${full_out}" ]; then
+                 if [ ${size_in} -gt ${size_out} ]; then
+                    fs_diff=$(( size_in - size_out ))
+                    fs_diff_p=`echo "${fs_diff}" | awk '{ printf("%'"'"'d\n",$1); }'`
+                    progress_2=" - size in ""${size_in_p}"" bytes - size out ""${size_out_p}"" bytes - saved ""${fs_diff_p}"" bytes"
+                 else
+                    if [ "${keep_all}" = "N" ]; then
+                       progress_2=" - size in ""${size_in_p}"" bytes - size out ""${size_out_p}"" bytes ***** output file has been deleted *****"
+                       rm "${full_out}"
+                    else
+                       fs_diff=$(( size_out - size_in ))
+                       fs_diff_p=`echo "${fs_diff}" | awk '{ printf("%'"'"'d\n",$1); }'`
+                       progress_2=" - size in ""${size_in_p}"" bytes - size out ""${size_out_p}"" bytes - added ""${fs_diff_p}"" bytes ***"
+                    fi
+                 fi
+              else
+                 progress_2=" - size in ""${size_in_p}"" bytes - size out ""${size_out_p}"" bytes ***** ERROR: EMPTY file has been deleted *****"
+                 rm "${full_out}"
+              fi
+
+              # ***** extra printf to terminal to move to next line
+              printf '%s\n' " "
+
+              log_entry="${progress_1}""${progress_2}"
+              add_to_log
+              log_entry="${log_heading_2}"
+              add_to_log
+              mv "${full_in}" "${full_mv}"
+          fi
+
+       done
+
+    else
+       log_entry="${log_heading_4}"
+       add_to_log
+       log_entry="***** Source directory ${source_path} does NOT exist! *****"
+       add_to_log
+       log_entry="${log_heading_4}"
+       add_to_log
+    fi 
+
+done 3<batch-conversion-data
+
+total_size_in_p=`echo "${total_size_in}" | awk '{ printf("%'"'"'d\n",$1); }'`
+total_size_out_p=`echo "${total_size_out}" | awk '{ printf("%'"'"'d\n",$1); }'`
+
+if [ ${total_size_in} -gt ${total_size_out} ]; then
+   fs_diff=$(( total_size_in - total_size_out ))
+   fs_diff_p=`echo "${fs_diff}" | awk '{ printf("%'"'"'d\n",$1); }'`
+   if [ ${count} -gt 1 ]; then
+      log_detail_line="${count}"" files processed - Total In ""${total_size_in_p}"" bytes - Total Out ""${total_size_out_p}"" bytes - saved ""${fs_diff_p}"" bytes"
+   else
+      log_detail_line="${count}"" file processed - Total In ""${total_size_in_p}"" bytes - Total Out ""${total_size_out_p}"" bytes - saved ""${fs_diff_p}"" bytes"
+   fi
+else
+   if [ ${count} -gt 1 ]; then
+      log_detail_line="${count}"" files processed - Total In ""${total_size_in_p}"" bytes - Total Out ""${total_size_out_p}"" bytes - added ""${fs_diff_p}"" bytes"
+   else
+      log_detail_line="${count}"" file processed - Total In ""${total_size_in_p}"" bytes - Total Out ""${total_size_out_p}"" bytes - added ""${fs_diff_p}"" bytes"
+   fi
+fi
+
+log_entry="${log_detail_line}"
+add_to_log
+
+# ***** if output size is greater than input size, emphasize it by printing two more times
+if [ ${total_size_out} -gt ${total_size_in} ]; then
+   add_to_log
+   add_to_log
+fi
+
+log_entry="${log_heading_3}"
+add_to_log
+
+log_entry="${log_heading_1}"
+add_to_log
+
+cd

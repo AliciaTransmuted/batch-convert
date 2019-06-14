@@ -1,4 +1,4 @@
-![Screenshot](https://i.imgur.com/0CzFSNS.png)
+![Screenshot](https://i.imgur.com/RcrySfK.png)
 
 # batch-convert
 Convert a source directory of media to a target directory, with detailed ongoing progress to the terminal
@@ -31,6 +31,6 @@ Options:
    and storing the source media to an archive directory, in case there are problems
    input media is probed to determine fps and duration (some source media can be near impossible to probe)
 
-![Screenshot](https://i.imgur.com/RcrySfK.png)
+![Screenshot](https://i.imgur.com/0CzFSNS.png)
 
 ![Screenshot](https://i.imgur.com/U4K0iL3.png)

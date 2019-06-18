@@ -5,6 +5,7 @@ Shell script to convert a source directory of media to a target directory, using
 - the shell script may be easily populated with directory names to allow copying media to a predefined directory structure, which will be duplicated on the target directory when run
 - the log may also be sent to a dated log file in a log directory, if selected
 - enter "./batch-convert -h" to see all options
+- dependancies: ffmpeg gawk mediainfo sed
 
 ![Screenshot](https://i.imgur.com/0CzFSNS.png)
 

@@ -16,7 +16,7 @@ trap "killall -q ffmpeg; rm -f "tmp/vstats*"; exit" INT TERM EXIT
 ### Functions
 ###
 
-function show_usage (){
+show_usage (){
 
 printf "\n"
 printf "Usage: $0 [options [parameters]]\n"
@@ -49,7 +49,7 @@ return 0
 }
 
 
-function add_to_log () {
+add_to_log () {
 
 if [ "$logfile" = "Y" ]; then
    echo "${log_entry}" >> "${conversion_log}"
